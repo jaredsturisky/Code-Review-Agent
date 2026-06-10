@@ -60,12 +60,6 @@ def get_pr_diff(owner, repo, pr_number):
 # Fetch the changed code from the pull request to review
 code_to_review = get_pr_diff("jaredsturisky", "Code-Review-Agent", 1)
 
-
-#temporary DEBUGGING code
-print("=== CODE BEING SENT TO GEMINI ===")
-print(code_to_review)
-print("=== END ===")
-
 # Stop here if the fetch failed, so we don't send the literal text "None" to Gemini
 if code_to_review is None:
     print("Could not fetch the PR diff, so there is nothing to review. Exiting.")
