@@ -21,7 +21,7 @@ def login(username, password):
 
 # The instruction we give Gemini, with the code attached
 prompt = f"""You are a code reviewer. Review the following code for bugs,
-security issues, and code quality. Be specific and concise.
+security issues, and code quality. Summarize each problem into one brief sentence.
 
 Code:
 {code_to_review}
