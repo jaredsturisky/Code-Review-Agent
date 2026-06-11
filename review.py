@@ -58,7 +58,7 @@ def get_pr_diff(owner, repo, pr_number):
 
 
 # Fetch the changed code from the pull request to review
-code_to_review = get_pr_diff("jaredsturisky", "Code-Review-Agent", 1)
+code_to_review = get_pr_diff("jaredsturisky", "Code-Review-Agent", 2)
 
 # Stop here if the fetch failed, so we don't send the literal text "None" to Gemini
 if code_to_review is None:
@@ -67,7 +67,7 @@ if code_to_review is None:
 
 # The instruction we give Gemini, with the code attached
 prompt = f"""You are a code reviewer. Review the following code for bugs,
-security issues, and code quality. Be specific and concise.
+security issues, and code quality. Summarize each problem in one sentence. Final output should be no longer than 1 sentence.
 
 Code:
 {code_to_review}
