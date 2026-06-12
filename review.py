@@ -1,3 +1,4 @@
+import json
 import os
 import requests
 from dotenv import load_dotenv
@@ -11,6 +12,33 @@ api_key = os.getenv("GEMINI_API_KEY")
 
 # Create a client - this is your connection to Gemini
 client = genai.Client(api_key=api_key)
+
+
+def get_pr_context():
+    """Determine which PR to review and which repo it lives in.
+
+    When running inside a GitHub Action, GitHub writes the event payload to a
+    JSON file whose path is in the GITHUB_EVENT_PATH environment variable. For a
+    pull_request event that payload contains the PR number at `number`, the repo
+    owner at `repository.owner.login`, and the repo name at `repository.name`.
+
+    Returns a (owner, repo, pr_number) tuple. If GITHUB_EVENT_PATH is not set
+    (i.e. running locally rather than in an Action), falls back to hardcoded
+    values so the script can still be tested manually.
+    """
+    event_path = os.getenv("GITHUB_EVENT_PATH")
+    if not event_path:
+        # Running locally: use the hardcoded test values.
+        return "jaredsturisky", "Code-Review-Agent", 2
+
+    with open(event_path) as event_file:
+        event = json.load(event_file)
+
+    owner = event["repository"]["owner"]["login"]
+    repo = event["repository"]["name"]
+    pr_number = event["number"]
+
+    return owner, repo, pr_number
 
 
 def get_pr_diff(owner, repo, pr_number):
@@ -97,8 +125,11 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
     return comment
 
 
+# Figure out which PR/repo to review (from the GitHub event, or local fallback)
+owner, repo, pr_number = get_pr_context()
+
 # Fetch the changed code from the pull request to review
-code_to_review = get_pr_diff("jaredsturisky", "Code-Review-Agent", 2)
+code_to_review = get_pr_diff(owner, repo, pr_number)
 
 # Stop here if the fetch failed, so we don't send the literal text "None" to Gemini
 if code_to_review is None:
@@ -124,4 +155,4 @@ review_text = response.text
 print(review_text)
 
 # Post the review back to the pull request as a comment
-post_pr_comment("jaredsturisky", "Code-Review-Agent", 2, review_text)
+post_pr_comment(owner, repo, pr_number, review_text)
