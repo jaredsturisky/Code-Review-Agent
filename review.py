@@ -10,7 +10,7 @@ load_dotenv()
 # Read the API key that .env just loaded
 api_key = os.getenv("GEMINI_API_KEY")
 
-# Create a client - this is your connection to Gemini
+# Create a client
 client = genai.Client(api_key=api_key)
 
 
@@ -216,3 +216,7 @@ print(review_text)
 
 # Post the review back to the pull request as a comment
 post_pr_comment(owner, repo, pr_number, review_text)
+
+# Fail the GitHub Actions check if the AI found issues, which blocks the merge
+if "No issues found in the provided diff." not in review_text:
+    raise SystemExit(1)
