@@ -125,20 +125,9 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
     return comment
 
 
-# Figure out which PR/repo to review (from the GitHub event, or local fallback)
-owner, repo, pr_number = get_pr_context()
-
-# Fetch the changed code from the pull request to review
-code_to_review = get_pr_diff(owner, repo, pr_number)
-
-# Stop here if the fetch failed, so we don't send the literal text "None" to Gemini
-if code_to_review is None:
-    print("Could not fetch the PR diff, so there is nothing to review. Exiting.")
-    raise SystemExit(1)
-
-# The instruction we give Gemini, with the code attached
-
-prompt = f"""
+def build_prompt(code_to_review):
+    """Build the Gemini review prompt for the given code/diff text."""
+    return f"""
 You are a senior code reviewer for a Node.js, TypeScript backend and React frontend codebase.
 
 Review only the provided pull request diff.
@@ -182,16 +171,25 @@ Expect environment variables for secret values.
 
 Output format for each issue:
 
-File:
 Location:
 Severity:
 Problem:
-Fix:
-Example:
+Suggested Edit:
+```<language>
+// Replace:
+<exact problematic lines from the diff>
+
+// With:
+<corrected replacement code>
+```
 
 Rules:
-Keep each field to one brief sentence.
-Only include Example when useful.
+Keep File, Location, Severity, and Problem to one brief sentence each.
+Always include Suggested Edit with a Replace/With code block targeting the exact lines from the diff.
+Use the correct language identifier in the code fence (ts, js, tsx, etc.).
+Copy the exact problematic lines from the diff into Replace.
+Write only the corrected replacement in With.
+Do not add prose after the code block.
 Do not include long explanations.
 Do not include paragraphs.
 Do not repeat the same issue multiple times.
@@ -204,19 +202,40 @@ Pull request diff:
 """
 
 
-# Send the prompt to Gemini and get a response
-response = client.models.generate_content(
-    model="gemini-2.5-flash",
-    contents=prompt,
-)
+def call_gemini(prompt, model="gemini-2.5-flash"):
+    """Send a prompt to Gemini and return the response text."""
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+    )
+    return response.text
 
-# Print Gemini's review to the terminal
-review_text = response.text
-print(review_text)
 
-# Post the review back to the pull request as a comment
-post_pr_comment(owner, repo, pr_number, review_text)
+def main():
+    # Figure out which PR/repo to review (from the GitHub event, or local fallback)
+    owner, repo, pr_number = get_pr_context()
 
-# Fail the GitHub Actions check if the AI found issues, which blocks the merge
-if "No issues found in the provided diff." not in review_text:
-    raise SystemExit(1)
+    # Fetch the changed code from the pull request to review
+    code_to_review = get_pr_diff(owner, repo, pr_number)
+
+    # Stop here if the fetch failed, so we don't send the literal text "None" to Gemini
+    if code_to_review is None:
+        print("Could not fetch the PR diff, so there is nothing to review. Exiting.")
+        raise SystemExit(1)
+
+    prompt = build_prompt(code_to_review)
+
+    # Print Gemini's review to the terminal
+    review_text = call_gemini(prompt)
+    print(review_text)
+
+    # Post the review back to the pull request as a comment
+    post_pr_comment(owner, repo, pr_number, review_text)
+
+    # Fail the GitHub Actions check if the AI found issues, which blocks the merge
+    if "No issues found in the provided diff." not in review_text:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
