@@ -21,7 +21,7 @@ def main():
     paths = sys.argv[1:]
     sections = []
     for path in paths:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             contents = f.read()
         sections.append(f"### {path}\n{contents}")
 

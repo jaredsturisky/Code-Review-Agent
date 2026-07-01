@@ -31,7 +31,7 @@ def get_pr_context():
         # Running locally: use the hardcoded test values.
         return "jaredsturisky", "Code-Review-Agent", 2
 
-    with open(event_path) as event_file:
+    with open(event_path, encoding="utf-8") as event_file:
         event = json.load(event_file)
 
     owner = event["repository"]["owner"]["login"]
@@ -60,7 +60,7 @@ def get_pr_diff(owner, repo, pr_number):
     }
 
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
     except requests.exceptions.HTTPError as error:
         status = error.response.status_code
@@ -105,7 +105,7 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
     payload = {"body": comment_body}
 
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
     except requests.exceptions.HTTPError as error:
         status = error.response.status_code
@@ -184,7 +184,7 @@ Suggested Edit:
 ```
 
 Rules:
-Keep File, Location, Severity, and Problem to one brief sentence each.
+Keep Location, Severity, and Problem to one brief sentence each.
 Always include Suggested Edit with a Replace/With code block targeting the exact lines from the diff.
 Use the correct language identifier in the code fence (ts, js, tsx, etc.).
 Copy the exact problematic lines from the diff into Replace.
@@ -203,11 +203,20 @@ Pull request diff:
 
 
 def call_gemini(prompt, model="gemini-2.5-flash"):
-    """Send a prompt to Gemini and return the response text."""
-    response = client.models.generate_content(
-        model=model,
-        contents=prompt,
-    )
+    """Send a prompt to Gemini and return the response text.
+
+    Returns None if the request fails so callers can handle the error instead
+    of crashing with a raw traceback.
+    """
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+        )
+    except Exception as error:
+        print(f"Gemini request failed: {error}")
+        return None
+
     return response.text
 
 
@@ -227,6 +236,12 @@ def main():
 
     # Print Gemini's review to the terminal
     review_text = call_gemini(prompt)
+
+    # Stop here if the Gemini call failed, so we don't post "None" as the review
+    if review_text is None:
+        print("Gemini did not return a review, so there is nothing to post. Exiting.")
+        raise SystemExit(1)
+
     print(review_text)
 
     # Post the review back to the pull request as a comment

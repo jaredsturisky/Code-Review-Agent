@@ -12,10 +12,11 @@ An AI agent that automatically reviews GitHub pull requests using Google's Gemin
 
 ## Setup
 
-Add these secrets to your repository (**Settings → Secrets and variables → Actions**):
+Add this secret to your repository (**Settings → Secrets and variables → Actions**):
 
 - `GEMINI_API_KEY` — your Google Gemini API key.
-- `GITHUB_TOKEN` — provided automatically by GitHub Actions; the workflow grants it `pull-requests: write`.
+
+You don't need to add `GITHUB_TOKEN`: GitHub Actions provides it automatically, and the workflow grants it `pull-requests: write`.
 
 That's it — the workflow runs on every PR automatically.
 
