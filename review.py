@@ -85,47 +85,44 @@ def get_pr_diff(owner, repo, pr_number):
     return "\n\n".join(sections)
 
 
-def post_pr_review(owner, repo, pr_number, review_body, event):
-    """Submit a formal review on a GitHub pull request.
+def post_pr_comment(owner, repo, pr_number, comment_body):
+    """Post a general comment on a GitHub pull request.
 
-    Uses the GitHub REST API pull request reviews endpoint to post `review_body`
-    with the given `event`: "APPROVE" when no issues were found, or
-    "REQUEST_CHANGES" when issues were found. REQUEST_CHANGES withholds approval
-    so the merge is not allowed (given branch protection that requires review
-    approval), without making the workflow itself fail. On success it prints a
-    confirmation and the URL of the new review.
+    Uses the GitHub REST API issues endpoint (PRs are issues for the purpose of
+    general comments) to add `comment_body` as a comment on the given PR. On
+    success it prints a confirmation and the URL of the new comment.
     """
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         print("GITHUB_TOKEN is not set in the environment.")
         return None
 
-    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/{pr_number}/comments"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
     }
-    payload = {"body": review_body, "event": event}
+    payload = {"body": comment_body}
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
         response.raise_for_status()
     except requests.exceptions.HTTPError as error:
         status = error.response.status_code
-        print(f"Failed to post PR review (HTTP {status}): {error.response.reason}")
+        print(f"Failed to post PR comment (HTTP {status}): {error.response.reason}")
         return None
     except requests.exceptions.RequestException as error:
-        print(f"Could not reach the GitHub API to post the review: {error}")
+        print(f"Could not reach the GitHub API to post the comment: {error}")
         return None
 
-    review = response.json()
-    review_url = review.get("html_url")
-    if review_url:
-        print(f"Posted {event} review to PR #{pr_number}: {review_url}")
+    comment = response.json()
+    comment_url = comment.get("html_url")
+    if comment_url:
+        print(f"Posted review comment to PR #{pr_number}: {comment_url}")
     else:
-        print(f"Posted {event} review to PR #{pr_number}.")
+        print(f"Posted review comment to PR #{pr_number}.")
 
-    return review
+    return comment
 
 
 def build_prompt(code_to_review):
@@ -247,25 +244,27 @@ def main():
 
     print(review_text)
 
-    # Decide the verdict from Gemini's own conclusion. A clean review approves
-    # the PR; any findings request changes so the merge is not approved.
-    approved = "No issues found in the provided diff." in review_text
-    if approved:
-        event = "APPROVE"
-        verdict = "Gemini review: APPROVED - no issues found."
-    else:
-        event = "REQUEST_CHANGES"
-        verdict = (
-            "Gemini review: CHANGES REQUESTED - issues found below; "
-            "this code is not approved for merge until they are resolved."
+    # Decide the verdict from Gemini's own conclusion.
+    issues_found = "No issues found in the provided diff." not in review_text
+    if issues_found:
+        header = (
+            "Gemini review: issues found below. This check is failing on purpose "
+            "to block the merge until they are resolved."
         )
+    else:
+        header = "Gemini review: no issues found."
 
-    review_body = f"{verdict}\n\n{review_text}"
+    comment_body = f"{header}\n\n{review_text}"
 
-    # Post Gemini's feedback as a formal PR review. The workflow itself never
-    # fails on findings: REQUEST_CHANGES simply withholds approval so the merge
-    # is not allowed, instead of the check reporting a failure.
-    post_pr_review(owner, repo, pr_number, review_body, event)
+    # Post Gemini's feedback as a comment first, so the reviewer sees it whether
+    # or not the check ends up failing.
+    post_pr_comment(owner, repo, pr_number, comment_body)
+
+    # Block the merge when issues are found by failing the required check. The
+    # red check is intentional here (it is the merge gate, not a crash); a clean
+    # review leaves the check green so the PR can be merged.
+    if issues_found:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
