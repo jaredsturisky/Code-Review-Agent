@@ -13,6 +13,10 @@ api_key = os.getenv("GEMINI_API_KEY")
 # Create a client
 client = genai.Client(api_key=api_key)
 
+# Maximum number of lines a single file may contain before it is flagged.
+# Kept as a simple constant so it is easy to change later.
+MAX_FILE_LINES = 500
+
 
 def get_pr_context():
     """Determine which PR to review and which repo it lives in.
@@ -144,6 +148,10 @@ Review against these standards:
 General:
 Flag readability, maintainability, production readiness, simplicity, consistency, overengineering, duplicate logic, tight coupling, and dead code issues.
 
+File constraints:
+Flag any file that is empty or has no meaningful code.
+Flag any file longer than {MAX_FILE_LINES} lines; a file must not exceed this limit.
+
 Clean Architecture:
 Flag database logic, HTTP calls, ORM or TypeORM decorators, and Express imports inside the domain layer.
 Flag controllers that contain business logic, database calls, or external API calls.
@@ -185,7 +193,7 @@ Suggested Edit:
 
 Rules:
 Keep Location, Severity, and Problem to one brief sentence each.
-Always include Suggested Edit with a Replace/With code block targeting the exact lines from the diff.
+Always include Suggested Edit. For code issues use a Replace/With code block targeting the exact lines from the diff; for file-level issues (an empty file or a file over the line limit) give a one-sentence instruction instead.
 Use the correct language identifier in the code fence (ts, js, tsx, etc.).
 Copy the exact problematic lines from the diff into Replace.
 Write only the corrected replacement in With.
