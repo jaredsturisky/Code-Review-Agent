@@ -132,7 +132,7 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
 def build_prompt(code_to_review):
     """Build the Gemini review prompt for the given code/diff text."""
     return f"""
-You are a senior code reviewer for a Node.js, TypeScript backend and React frontend codebase.
+You are a senior code reviewer for a Node.js and React codebase backed by a PostgreSQL database.
 
 Review only the provided pull request diff.
 Only comment on issues actually present in the diff.
@@ -155,14 +155,18 @@ Flag any file longer than {MAX_FILE_LINES} lines; a file must not exceed this li
 Clean Architecture:
 Flag database logic, HTTP calls, ORM or TypeORM decorators, and Express imports inside the domain layer.
 Flag controllers that contain business logic, database calls, or external API calls.
-Flag repositories with raw SQL string concatenation, missing pagination, inefficient queries, indexing concerns, or N plus 1 query risks.
+Flag repositories with raw or string-concatenated PostgreSQL queries, missing parameterization, missing pagination, inefficient queries, indexing concerns, or N plus 1 query risks.
 
-TypeScript:
+TypeScript (applies only to .ts and .tsx files; never flag a .js or .jsx file for not being TypeScript and never suggest converting it):
 Flag use of any, implicit types, unsafe casting, missing interfaces, and weak DTO typing.
 
 Security:
-This is the highest priority.
-Flag hardcoded credentials, secrets in source code, sensitive data in logs, SQL injection, NoSQL injection, unsafe dynamic queries, and missing authorization checks.
+This is your highest priority. Scrutinize every diff for security problems first, and never overlook a potential vulnerability even when other issues are present; keep considering the other standards too, but security comes first.
+Flag hardcoded credentials, secrets in source code, sensitive data in logs, SQL injection, unparameterized or string-built PostgreSQL queries, NoSQL injection, unsafe dynamic queries, and missing authorization checks.
+
+Package security:
+Flag dependencies with known vulnerabilities or CVEs, outdated or unmaintained packages, and suspicious, malicious, or typosquatted package names.
+Flag dependencies pulled from untrusted sources, loose or wildcard version ranges that allow unexpected upgrades, and unnecessary new dependencies that duplicate existing functionality.
 
 Error handling:
 Flag missing try catch where needed, empty catch blocks, unhandled errors, raw stack trace exposure, and missing centralized error handling.
