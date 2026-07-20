@@ -29,8 +29,35 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Fail fast if rules.json was changed without regenerating the explorer,
+      # so the human-facing guidelines can never drift from what the agent
+      # enforces. Uses only the standard library (no pip deps required).
+      - name: Verify guidelines explorer is in sync with rules.json
+        run: python build_explorer.py --check
+
+      # Only relevant when the repo being reviewed is a Node project. Skipped
+      # automatically when there is no package.json (e.g. this Python repo).
+      - name: Set up Node.js
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run npm audit
+        if: hashFiles('package.json') != ''
+        # Generate a lockfile WITHOUT running install scripts (never execute a
+        # PR's untrusted postinstall hooks), then audit. npm audit exits non-zero
+        # when vulnerabilities exist, so `|| true` keeps the step green and lets
+        # review.py interpret audit.json.
+        run: |
+          npm install --package-lock-only --ignore-scripts || true
+          npm audit --json > audit.json || true
+
       - name: Run AI review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Where review.py looks for the npm audit output. Absent/empty file is
+          # handled gracefully (the PKG-* rules fall back to manual-review only).
+          NPM_AUDIT_FILE: audit.json
         run: python review.py

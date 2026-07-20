@@ -1,0 +1,262 @@
+[
+  {
+    "id": "PKG-001",
+    "layer": "packages",
+    "severity": "critical",
+    "owasp": "A06:2021",
+    "title": "Vulnerable package version detected",
+    "detect": "A newly added or updated npm package is pinned to a version with a known CVE. Prefer the injected npm audit results as ground truth; never assert a CVE that is not in that audit output.",
+    "insecure_example": "\"lodash\": \"4.17.4\"  // CVE-2019-10744",
+    "secure_example": "\"lodash\": \"4.17.21\" // patched"
+  },
+  {
+    "id": "PKG-002",
+    "layer": "packages",
+    "severity": "critical",
+    "owasp": "A06:2021",
+    "title": "Unpinned or wildcard dependency version",
+    "detect": "A production dependency uses ^, ~, or * instead of an exact version, allowing a silently vulnerable patch release to be pulled in at install time.",
+    "insecure_example": "\"express\": \"^4.0.0\"\n\"pg\": \"*\"",
+    "secure_example": "\"express\": \"4.18.2\"\n\"pg\": \"8.11.3\""
+  },
+  {
+    "id": "PKG-003",
+    "layer": "packages",
+    "severity": "warning",
+    "owasp": "A06:2021",
+    "title": "New package with no community trust signals",
+    "detect": "A brand-new or obscure dependency is added (very low downloads, no repo, recently published). Flag for manual supply-chain review; cannot be confirmed from the diff alone.",
+    "insecure_example": "\"some-new-util\": \"1.0.0\" // 12 weekly downloads, no repo",
+    "secure_example": "// Prefer a well-established alternative; verify downloads, stars, maintainer history"
+  },
+  {
+    "id": "PKG-004",
+    "layer": "packages",
+    "severity": "critical",
+    "owasp": "A06:2021",
+    "title": "Dependency confusion / typosquatting risk",
+    "detect": "An added package name is a near-match to a popular or internal package (possible typosquat). Suspect but verify against the registry; do not confirm from the diff alone.",
+    "insecure_example": "\"lodahs\": \"1.0.0\" // typo of lodash",
+    "secure_example": "// Verify the exact package name on npmjs.com; use: npm info <package>"
+  },
+  {
+    "id": "NODE-001",
+    "layer": "node",
+    "severity": "critical",
+    "owasp": "A03:2021",
+    "title": "SQL / NoSQL injection via string interpolation",
+    "detect": "A query is built by concatenating or interpolating user input instead of using parameterized queries or ORM methods. Applies to raw pg queries, Sequelize query(), and Knex raw().",
+    "insecure_example": "const q = `SELECT * FROM users WHERE email = '${req.body.email}'`\nawait db.query(q)",
+    "secure_example": "await db.query('SELECT * FROM users WHERE email=$1', [req.body.email])"
+  },
+  {
+    "id": "NODE-002",
+    "layer": "node",
+    "severity": "critical",
+    "owasp": "A03:2021",
+    "title": "Command injection via exec / spawn",
+    "detect": "User input is passed to child_process.exec, execSync, or spawn with shell:true, allowing arbitrary command execution.",
+    "insecure_example": "exec(`convert ${req.body.filename} out.png`)",
+    "secure_example": "spawn('convert', [req.body.filename, 'out.png'], { shell: false })"
+  },
+  {
+    "id": "NODE-003",
+    "layer": "node",
+    "severity": "critical",
+    "owasp": "A02:2021",
+    "title": "Hardcoded secrets or credentials",
+    "detect": "An API key, DB password, JWT secret, or other credential is hardcoded in source instead of being loaded from an environment variable.",
+    "insecure_example": "const JWT_SECRET = 'mysecretkey123'\nconst DB_PASS = 'admin1234'",
+    "secure_example": "const JWT_SECRET = process.env.JWT_SECRET\nif (!JWT_SECRET) throw new Error('Missing JWT_SECRET')"
+  },
+  {
+    "id": "NODE-004",
+    "layer": "node",
+    "severity": "critical",
+    "owasp": "A01:2021",
+    "title": "Path traversal in file operations",
+    "detect": "A user-supplied filename or path is used directly in an fs operation without resolving and validating it against an allowed base directory.",
+    "insecure_example": "const file = req.params.name\nfs.readFile('./uploads/' + file, cb)",
+    "secure_example": "const safe = path.resolve('./uploads', path.basename(req.params.name))\nif (!safe.startsWith(path.resolve('./uploads'))) throw new Error()\nfs.readFile(safe, cb)"
+  },
+  {
+    "id": "NODE-005",
+    "layer": "node",
+    "severity": "warning",
+    "owasp": "A04:2021",
+    "title": "Sensitive data in error responses",
+    "detect": "A stack trace, DB error message, or internal path is returned to the client instead of a generic error message.",
+    "insecure_example": "res.status(500).json({ error: err.stack })",
+    "secure_example": "logger.error(err)\nres.status(500).json({ error: 'Internal server error' })"
+  },
+  {
+    "id": "NODE-006",
+    "layer": "node",
+    "severity": "warning",
+    "owasp": "A07:2021",
+    "title": "Missing rate limiting on sensitive endpoints",
+    "detect": "The diff introduces a login, password-reset, OTP, or registration endpoint with no rate limiting. Absence rule: only flag when the diff adds the endpoint and no limiter is present in the diff; the limiter may exist elsewhere, so mark as verify.",
+    "insecure_example": "app.post('/auth/login', loginHandler) // no rate limiting",
+    "secure_example": "app.post('/auth/login', rateLimit({ windowMs: 15*60*1000, max: 10 }), loginHandler)"
+  },
+  {
+    "id": "NODE-007",
+    "layer": "node",
+    "severity": "warning",
+    "owasp": "A03:2021",
+    "title": "Prototype pollution via object merge",
+    "detect": "A user-supplied object is merged with Object.assign or _.merge without key validation, allowing prototype pollution.",
+    "insecure_example": "Object.assign(config, req.body)\n_.merge(target, req.body)",
+    "secure_example": "const safe = _.pick(req.body, ['theme','lang'])\nObject.assign(config, safe)"
+  },
+  {
+    "id": "REACT-001",
+    "layer": "react",
+    "severity": "critical",
+    "owasp": "A03:2021",
+    "title": "dangerouslySetInnerHTML with user content",
+    "detect": "dangerouslySetInnerHTML is used with user-supplied or API-sourced data without sanitization, enabling XSS.",
+    "insecure_example": "<div dangerouslySetInnerHTML={{ __html: user.bio }}/>",
+    "secure_example": "import DOMPurify from 'dompurify'\n<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(user.bio) }}/>"
+  },
+  {
+    "id": "REACT-002",
+    "layer": "react",
+    "severity": "critical",
+    "owasp": "A02:2021",
+    "title": "Sensitive data stored in localStorage",
+    "detect": "A JWT, session token, or PII is stored in localStorage, where any XSS payload can read it. localStorage is acceptable only for non-sensitive UI state.",
+    "insecure_example": "localStorage.setItem('token', jwtToken)",
+    "secure_example": "// Auth token: httpOnly cookie set by server\nlocalStorage.setItem('theme', 'dark') // non-sensitive only"
+  },
+  {
+    "id": "REACT-003",
+    "layer": "react",
+    "severity": "warning",
+    "owasp": "A02:2021",
+    "title": "API keys or secrets in frontend bundle",
+    "detect": "A private API key or secret is placed in a frontend env var (e.g. REACT_APP_*), which ships to the client.",
+    "insecure_example": "REACT_APP_STRIPE_SECRET=sk_live_xxx",
+    "secure_example": "REACT_APP_STRIPE_PUBLIC=pk_live_xxx // secret keys stay server-side"
+  },
+  {
+    "id": "REACT-004",
+    "layer": "react",
+    "severity": "warning",
+    "owasp": "A01:2021",
+    "title": "Open redirect via user-controlled navigation",
+    "detect": "window.location.href or navigate(url) is set from a query param or user input without validating against an allowlist of internal paths.",
+    "insecure_example": "const url = new URLSearchParams(window.location.search).get('next')\nwindow.location.href = url",
+    "secure_example": "const next = new URLSearchParams(window.location.search).get('next')\nnavigate(next?.startsWith('/') ? next : '/dashboard')"
+  },
+  {
+    "id": "DB-001",
+    "layer": "db",
+    "severity": "critical",
+    "owasp": "A03:2021",
+    "title": "Raw ORM query with interpolated input",
+    "detect": "sequelize.query(), TypeORM query(), or Knex raw() is called with a template literal or string concatenation, bypassing ORM parameterization.",
+    "insecure_example": "sequelize.query(`SELECT * FROM orders WHERE user_id = ${userId}`)",
+    "secure_example": "sequelize.query('SELECT * FROM orders WHERE user_id = :id', { replacements: { id: userId } })"
+  },
+  {
+    "id": "DB-002",
+    "layer": "db",
+    "severity": "warning",
+    "owasp": "A01:2021",
+    "title": "Missing authorization scope on data queries",
+    "detect": "A record is fetched by ID without scoping to the authenticated user (IDOR). Absence rule: flag when the diff adds a by-ID fetch with no ownership clause; scoping may occur elsewhere, so mark as verify.",
+    "insecure_example": "const order = await Order.findByPk(req.params.id)",
+    "secure_example": "const order = await Order.findOne({ where: { id: req.params.id, userId: req.user.id } })"
+  },
+  {
+    "id": "DB-003",
+    "layer": "db",
+    "severity": "warning",
+    "owasp": "A05:2021",
+    "title": "Unbounded query on large table",
+    "detect": "A findAll or SELECT * has no LIMIT/pagination on a table that can grow large, a DoS and data-exposure risk.",
+    "insecure_example": "const users = await User.findAll()",
+    "secure_example": "const users = await User.findAll({ limit: parseInt(req.query.limit) || 20, offset: parseInt(req.query.offset) || 0 })"
+  },
+  {
+    "id": "DB-004",
+    "layer": "db",
+    "severity": "warning",
+    "owasp": "A04:2021",
+    "title": "Sensitive columns returned in default scope",
+    "detect": "A query returns a model whose default scope includes sensitive fields (password_hash, 2fa_secret, ssn) without excluding them. Needs the model definition, which may not be in the diff; mark as verify.",
+    "insecure_example": "const user = await User.findByPk(id)\nres.json(user) // includes password_hash",
+    "secure_example": "const user = await User.findByPk(id, { attributes: { exclude: ['passwordHash','twoFaSecret'] } })"
+  },
+  {
+    "id": "AUTH-001",
+    "layer": "auth",
+    "severity": "critical",
+    "owasp": "A02:2021",
+    "title": "JWT verified without algorithm pinning",
+    "detect": "jwt.verify is called without an explicit algorithms option, allowing the alg:none / algorithm-confusion bypass.",
+    "insecure_example": "jwt.verify(token, secret)",
+    "secure_example": "jwt.verify(token, secret, { algorithms: ['HS256'] })"
+  },
+  {
+    "id": "AUTH-002",
+    "layer": "auth",
+    "severity": "critical",
+    "owasp": "A01:2021",
+    "title": "Authorization check only at route level",
+    "detect": "A role/permission check exists only in route middleware with no enforcement at the service/data layer. Absence rule spanning files; mark as verify.",
+    "insecure_example": "router.get('/admin/users', requireAdmin, handler) // handler has no ownership check",
+    "secure_example": "async function getAdminUsers(user) {\n  if (user.role !== 'admin') throw new ForbiddenError()\n  return User.findAll()\n}"
+  },
+  {
+    "id": "AUTH-003",
+    "layer": "auth",
+    "severity": "critical",
+    "owasp": "A02:2021",
+    "title": "Password hashed with weak or no algorithm",
+    "detect": "A password is stored using MD5, SHA-1, unsalted SHA-256, or plaintext instead of bcrypt (cost >= 12), Argon2id, or scrypt.",
+    "insecure_example": "const hash = crypto.createHash('md5').update(password).digest('hex')",
+    "secure_example": "const hash = await bcrypt.hash(password, 12)"
+  },
+  {
+    "id": "AUTH-004",
+    "layer": "auth",
+    "severity": "warning",
+    "owasp": "A01:2021",
+    "title": "Missing CSRF protection on state-changing endpoints",
+    "detect": "A cookie-session, state-changing endpoint is added without CSRF protection or Origin/Referer verification. Absence rule; mark as verify.",
+    "insecure_example": "app.post('/transfer', isAuthenticated, transferHandler) // no CSRF token",
+    "secure_example": "app.post('/transfer', isAuthenticated, doubleCsrfProtection, transferHandler)"
+  },
+  {
+    "id": "INFRA-001",
+    "layer": "infra",
+    "severity": "critical",
+    "owasp": "A02:2021",
+    "title": "dotenv / .env file committed to repo",
+    "detect": "The PR adds a .env, .env.production, or .env.local file with real credentials. Detectable from the changed filenames.",
+    "insecure_example": "// PR adds: .env, .env.production, .env.local",
+    "secure_example": "// .gitignore must contain: .env, .env.*, !.env.example"
+  },
+  {
+    "id": "INFRA-002",
+    "layer": "infra",
+    "severity": "warning",
+    "owasp": "A05:2021",
+    "title": "Security headers not set",
+    "detect": "An Express app is created with no security-header middleware (helmet). Absence rule across the app; mark as verify.",
+    "insecure_example": "const app = express() // no security headers",
+    "secure_example": "const helmet = require('helmet')\napp.use(helmet())"
+  },
+  {
+    "id": "INFRA-003",
+    "layer": "infra",
+    "severity": "warning",
+    "owasp": "A05:2021",
+    "title": "CORS configured with wildcard origin",
+    "detect": "CORS is configured with origin:'*', especially together with credentials:true, allowing any site to make authenticated cross-origin requests.",
+    "insecure_example": "app.use(cors({ origin: '*', credentials: true }))",
+    "secure_example": "app.use(cors({ origin: ['https://app.yourdomain.com'], credentials: true }))"
+  }
+]

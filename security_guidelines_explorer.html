@@ -1,0 +1,152 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+h2.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+.wrap{padding:1rem 0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.tab{padding:6px 14px;border-radius:20px;border:1px solid var(--border);font-size:13px;cursor:pointer;color:var(--text-secondary);background:var(--surface-1);transition:all .15s}
+.tab.active{background:var(--bg-danger);border-color:var(--border-danger);color:var(--text-danger)}
+.tab.active.warn{background:var(--bg-warning);border-color:var(--border-warning);color:var(--text-warning)}
+.tab.active.info{background:var(--bg-accent);border-color:var(--border-accent);color:var(--text-accent)}
+.section-title{font-size:13px;font-weight:500;color:var(--text-secondary);margin-bottom:10px;letter-spacing:.03em;text-transform:uppercase}
+.rule{border:1px solid var(--border);border-radius:10px;margin-bottom:8px;overflow:hidden}
+.rule-header{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;background:var(--surface-1)}
+.rule-header:hover{background:var(--surface-0)}
+.badge{flex-shrink:0;font-size:11px;font-weight:500;padding:2px 8px;border-radius:10px;margin-top:1px}
+.badge.critical{background:var(--bg-danger);color:var(--text-danger)}
+.badge.warning{background:var(--bg-warning);color:var(--text-warning)}
+.badge.info{background:var(--bg-accent);color:var(--text-accent)}
+.rule-id{flex-shrink:0;font-size:11px;font-family:var(--font-mono);color:var(--text-muted);margin-top:3px}
+.rule-title{font-size:14px;font-weight:500;color:var(--text-primary);flex:1}
+.rule-body{display:none;padding:10px 14px 12px;border-top:1px solid var(--border);background:var(--surface-0)}
+.rule-body.open{display:block}
+.rule-desc{font-size:13px;color:var(--text-secondary);line-height:1.6;margin-bottom:8px}
+.code-pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.code-block{border-radius:6px;padding:8px 10px;font-size:12px;font-family:var(--font-mono);line-height:1.5}
+.code-block.bad{background:var(--bg-danger);border:1px solid var(--border-danger);color:var(--text-danger)}
+.code-block.good{background:var(--bg-success);border:1px solid var(--border-success);color:var(--text-success)}
+.code-label{font-size:10px;font-weight:500;margin-bottom:4px;opacity:.7;text-transform:uppercase;letter-spacing:.05em}
+.owasp{display:inline-block;font-size:11px;font-family:var(--font-mono);background:var(--surface-1);border:1px solid var(--border);padding:1px 6px;border-radius:4px;color:var(--text-muted);margin-top:6px}
+.filter-row{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.filter-label{font-size:12px;color:var(--text-muted)}
+.layer-btn{padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);color:var(--text-secondary);background:var(--surface-1);transition:all .15s}
+.layer-btn.active{background:var(--surface-2);border-color:var(--border-stronger);color:var(--text-primary);font-weight:500}
+.count-pill{font-size:11px;background:var(--surface-0);border:1px solid var(--border);border-radius:10px;padding:1px 7px;color:var(--text-muted);margin-left:4px}
+@media(max-width:520px){.code-pair{grid-template-columns:1fr}}
+</style>
+<div class="wrap">
+<h2 class="sr-only">Security code review guidelines explorer — browse rules by severity and stack layer</h2>
+
+<div class="tabs">
+  <button class="tab active" onclick="setSeverity('all',this)">All rules <span class="count-pill" id="cnt-all">0</span></button>
+  <button class="tab" onclick="setSeverity('critical',this)">Critical <span class="count-pill" id="cnt-critical">0</span></button>
+  <button class="tab" onclick="setSeverity('warning',this)" id="tab-warn">Warning <span class="count-pill" id="cnt-warning">0</span></button>
+  <button class="tab" onclick="setSeverity('info',this)" id="tab-info">Info <span class="count-pill" id="cnt-info">0</span></button>
+</div>
+
+<div class="filter-row">
+  <span class="filter-label">Layer:</span>
+  <button class="layer-btn active" onclick="setLayer('all',this)">All</button>
+  <button class="layer-btn" onclick="setLayer('packages',this)">Packages</button>
+  <button class="layer-btn" onclick="setLayer('node',this)">Node.js</button>
+  <button class="layer-btn" onclick="setLayer('react',this)">React</button>
+  <button class="layer-btn" onclick="setLayer('db',this)">DB / ORM</button>
+  <button class="layer-btn" onclick="setLayer('auth',this)">Auth</button>
+  <button class="layer-btn" onclick="setLayer('infra',this)">Infra</button>
+</div>
+
+<div id="rules-container"></div>
+</div>
+
+<script>
+const RULES = [
+  {id:"PKG-001",layer:"packages",severity:"critical",title:"Vulnerable package version detected",owasp:"A06:2021",desc:"A newly added or updated npm package is pinned to a version with a known CVE. Prefer the injected npm audit results as ground truth; never assert a CVE that is not in that audit output.",bad:"\"lodash\": \"4.17.4\"  // CVE-2019-10744",good:"\"lodash\": \"4.17.21\" // patched"},
+  {id:"PKG-002",layer:"packages",severity:"critical",title:"Unpinned or wildcard dependency version",owasp:"A06:2021",desc:"A production dependency uses ^, ~, or * instead of an exact version, allowing a silently vulnerable patch release to be pulled in at install time.",bad:"\"express\": \"^4.0.0\"\n\"pg\": \"*\"",good:"\"express\": \"4.18.2\"\n\"pg\": \"8.11.3\""},
+  {id:"PKG-003",layer:"packages",severity:"warning",title:"New package with no community trust signals",owasp:"A06:2021",desc:"A brand-new or obscure dependency is added (very low downloads, no repo, recently published). Flag for manual supply-chain review; cannot be confirmed from the diff alone.",bad:"\"some-new-util\": \"1.0.0\" // 12 weekly downloads, no repo",good:"// Prefer a well-established alternative; verify downloads, stars, maintainer history"},
+  {id:"PKG-004",layer:"packages",severity:"critical",title:"Dependency confusion / typosquatting risk",owasp:"A06:2021",desc:"An added package name is a near-match to a popular or internal package (possible typosquat). Suspect but verify against the registry; do not confirm from the diff alone.",bad:"\"lodahs\": \"1.0.0\" // typo of lodash",good:"// Verify the exact package name on npmjs.com; use: npm info <package>"},
+  {id:"NODE-001",layer:"node",severity:"critical",title:"SQL / NoSQL injection via string interpolation",owasp:"A03:2021",desc:"A query is built by concatenating or interpolating user input instead of using parameterized queries or ORM methods. Applies to raw pg queries, Sequelize query(), and Knex raw().",bad:"const q = `SELECT * FROM users WHERE email = '${req.body.email}'`\nawait db.query(q)",good:"await db.query('SELECT * FROM users WHERE email=$1', [req.body.email])"},
+  {id:"NODE-002",layer:"node",severity:"critical",title:"Command injection via exec / spawn",owasp:"A03:2021",desc:"User input is passed to child_process.exec, execSync, or spawn with shell:true, allowing arbitrary command execution.",bad:"exec(`convert ${req.body.filename} out.png`)",good:"spawn('convert', [req.body.filename, 'out.png'], { shell: false })"},
+  {id:"NODE-003",layer:"node",severity:"critical",title:"Hardcoded secrets or credentials",owasp:"A02:2021",desc:"An API key, DB password, JWT secret, or other credential is hardcoded in source instead of being loaded from an environment variable.",bad:"const JWT_SECRET = 'mysecretkey123'\nconst DB_PASS = 'admin1234'",good:"const JWT_SECRET = process.env.JWT_SECRET\nif (!JWT_SECRET) throw new Error('Missing JWT_SECRET')"},
+  {id:"NODE-004",layer:"node",severity:"critical",title:"Path traversal in file operations",owasp:"A01:2021",desc:"A user-supplied filename or path is used directly in an fs operation without resolving and validating it against an allowed base directory.",bad:"const file = req.params.name\nfs.readFile('./uploads/' + file, cb)",good:"const safe = path.resolve('./uploads', path.basename(req.params.name))\nif (!safe.startsWith(path.resolve('./uploads'))) throw new Error()\nfs.readFile(safe, cb)"},
+  {id:"NODE-005",layer:"node",severity:"warning",title:"Sensitive data in error responses",owasp:"A04:2021",desc:"A stack trace, DB error message, or internal path is returned to the client instead of a generic error message.",bad:"res.status(500).json({ error: err.stack })",good:"logger.error(err)\nres.status(500).json({ error: 'Internal server error' })"},
+  {id:"NODE-006",layer:"node",severity:"warning",title:"Missing rate limiting on sensitive endpoints",owasp:"A07:2021",desc:"The diff introduces a login, password-reset, OTP, or registration endpoint with no rate limiting. Absence rule: only flag when the diff adds the endpoint and no limiter is present in the diff; the limiter may exist elsewhere, so mark as verify.",bad:"app.post('/auth/login', loginHandler) // no rate limiting",good:"app.post('/auth/login', rateLimit({ windowMs: 15*60*1000, max: 10 }), loginHandler)"},
+  {id:"NODE-007",layer:"node",severity:"warning",title:"Prototype pollution via object merge",owasp:"A03:2021",desc:"A user-supplied object is merged with Object.assign or _.merge without key validation, allowing prototype pollution.",bad:"Object.assign(config, req.body)\n_.merge(target, req.body)",good:"const safe = _.pick(req.body, ['theme','lang'])\nObject.assign(config, safe)"},
+  {id:"REACT-001",layer:"react",severity:"critical",title:"dangerouslySetInnerHTML with user content",owasp:"A03:2021",desc:"dangerouslySetInnerHTML is used with user-supplied or API-sourced data without sanitization, enabling XSS.",bad:"<div dangerouslySetInnerHTML={{ __html: user.bio }}/>",good:"import DOMPurify from 'dompurify'\n<div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(user.bio) }}/>"},
+  {id:"REACT-002",layer:"react",severity:"critical",title:"Sensitive data stored in localStorage",owasp:"A02:2021",desc:"A JWT, session token, or PII is stored in localStorage, where any XSS payload can read it. localStorage is acceptable only for non-sensitive UI state.",bad:"localStorage.setItem('token', jwtToken)",good:"// Auth token: httpOnly cookie set by server\nlocalStorage.setItem('theme', 'dark') // non-sensitive only"},
+  {id:"REACT-003",layer:"react",severity:"warning",title:"API keys or secrets in frontend bundle",owasp:"A02:2021",desc:"A private API key or secret is placed in a frontend env var (e.g. REACT_APP_*), which ships to the client.",bad:"REACT_APP_STRIPE_SECRET=sk_live_xxx",good:"REACT_APP_STRIPE_PUBLIC=pk_live_xxx // secret keys stay server-side"},
+  {id:"REACT-004",layer:"react",severity:"warning",title:"Open redirect via user-controlled navigation",owasp:"A01:2021",desc:"window.location.href or navigate(url) is set from a query param or user input without validating against an allowlist of internal paths.",bad:"const url = new URLSearchParams(window.location.search).get('next')\nwindow.location.href = url",good:"const next = new URLSearchParams(window.location.search).get('next')\nnavigate(next?.startsWith('/') ? next : '/dashboard')"},
+  {id:"DB-001",layer:"db",severity:"critical",title:"Raw ORM query with interpolated input",owasp:"A03:2021",desc:"sequelize.query(), TypeORM query(), or Knex raw() is called with a template literal or string concatenation, bypassing ORM parameterization.",bad:"sequelize.query(`SELECT * FROM orders WHERE user_id = ${userId}`)",good:"sequelize.query('SELECT * FROM orders WHERE user_id = :id', { replacements: { id: userId } })"},
+  {id:"DB-002",layer:"db",severity:"warning",title:"Missing authorization scope on data queries",owasp:"A01:2021",desc:"A record is fetched by ID without scoping to the authenticated user (IDOR). Absence rule: flag when the diff adds a by-ID fetch with no ownership clause; scoping may occur elsewhere, so mark as verify.",bad:"const order = await Order.findByPk(req.params.id)",good:"const order = await Order.findOne({ where: { id: req.params.id, userId: req.user.id } })"},
+  {id:"DB-003",layer:"db",severity:"warning",title:"Unbounded query on large table",owasp:"A05:2021",desc:"A findAll or SELECT * has no LIMIT/pagination on a table that can grow large, a DoS and data-exposure risk.",bad:"const users = await User.findAll()",good:"const users = await User.findAll({ limit: parseInt(req.query.limit) || 20, offset: parseInt(req.query.offset) || 0 })"},
+  {id:"DB-004",layer:"db",severity:"warning",title:"Sensitive columns returned in default scope",owasp:"A04:2021",desc:"A query returns a model whose default scope includes sensitive fields (password_hash, 2fa_secret, ssn) without excluding them. Needs the model definition, which may not be in the diff; mark as verify.",bad:"const user = await User.findByPk(id)\nres.json(user) // includes password_hash",good:"const user = await User.findByPk(id, { attributes: { exclude: ['passwordHash','twoFaSecret'] } })"},
+  {id:"AUTH-001",layer:"auth",severity:"critical",title:"JWT verified without algorithm pinning",owasp:"A02:2021",desc:"jwt.verify is called without an explicit algorithms option, allowing the alg:none / algorithm-confusion bypass.",bad:"jwt.verify(token, secret)",good:"jwt.verify(token, secret, { algorithms: ['HS256'] })"},
+  {id:"AUTH-002",layer:"auth",severity:"critical",title:"Authorization check only at route level",owasp:"A01:2021",desc:"A role/permission check exists only in route middleware with no enforcement at the service/data layer. Absence rule spanning files; mark as verify.",bad:"router.get('/admin/users', requireAdmin, handler) // handler has no ownership check",good:"async function getAdminUsers(user) {\n  if (user.role !== 'admin') throw new ForbiddenError()\n  return User.findAll()\n}"},
+  {id:"AUTH-003",layer:"auth",severity:"critical",title:"Password hashed with weak or no algorithm",owasp:"A02:2021",desc:"A password is stored using MD5, SHA-1, unsalted SHA-256, or plaintext instead of bcrypt (cost >= 12), Argon2id, or scrypt.",bad:"const hash = crypto.createHash('md5').update(password).digest('hex')",good:"const hash = await bcrypt.hash(password, 12)"},
+  {id:"AUTH-004",layer:"auth",severity:"warning",title:"Missing CSRF protection on state-changing endpoints",owasp:"A01:2021",desc:"A cookie-session, state-changing endpoint is added without CSRF protection or Origin/Referer verification. Absence rule; mark as verify.",bad:"app.post('/transfer', isAuthenticated, transferHandler) // no CSRF token",good:"app.post('/transfer', isAuthenticated, doubleCsrfProtection, transferHandler)"},
+  {id:"INFRA-001",layer:"infra",severity:"critical",title:"dotenv / .env file committed to repo",owasp:"A02:2021",desc:"The PR adds a .env, .env.production, or .env.local file with real credentials. Detectable from the changed filenames.",bad:"// PR adds: .env, .env.production, .env.local",good:"// .gitignore must contain: .env, .env.*, !.env.example"},
+  {id:"INFRA-002",layer:"infra",severity:"warning",title:"Security headers not set",owasp:"A05:2021",desc:"An Express app is created with no security-header middleware (helmet). Absence rule across the app; mark as verify.",bad:"const app = express() // no security headers",good:"const helmet = require('helmet')\napp.use(helmet())"},
+  {id:"INFRA-003",layer:"infra",severity:"warning",title:"CORS configured with wildcard origin",owasp:"A05:2021",desc:"CORS is configured with origin:'*', especially together with credentials:true, allowing any site to make authenticated cross-origin requests.",bad:"app.use(cors({ origin: '*', credentials: true }))",good:"app.use(cors({ origin: ['https://app.yourdomain.com'], credentials: true }))"},
+];
+
+let activeSev = 'all', activeLayer = 'all';
+
+function setSeverity(sev, btn) {
+  activeSev = sev;
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active','warn','info'));
+  btn.classList.add('active');
+  if (sev === 'warning') btn.classList.add('warn');
+  if (sev === 'info') btn.classList.add('info');
+  render();
+}
+function setLayer(layer, btn) {
+  activeLayer = layer;
+  document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  render();
+}
+function toggleBody(id) {
+  const el = document.getElementById('body-'+id);
+  el.classList.toggle('open');
+}
+function render() {
+  const filtered = RULES.filter(r =>
+    (activeSev === 'all' || r.severity === activeSev) &&
+    (activeLayer === 'all' || r.layer === activeLayer)
+  );
+  const counts = {all: RULES.length, critical:0, warning:0, info:0};
+  RULES.forEach(r => { if(counts[r.severity]!==undefined) counts[r.severity]++; });
+  ['all','critical','warning','info'].forEach(k => {
+    const el = document.getElementById('cnt-'+k);
+    if (el) el.textContent = k === 'all' ? RULES.length : counts[k];
+  });
+  const grouped = {};
+  filtered.forEach(r => { (grouped[r.layer] = grouped[r.layer]||[]).push(r); });
+  const layerLabels = {packages:'Vulnerable packages',node:'Node.js backend',react:'React frontend',db:'Database / ORM',auth:'Authentication & authorization',infra:'Infrastructure & config'};
+  let html = '';
+  if (!filtered.length) { html = '<p style="color:var(--text-muted);font-size:13px;padding:12px 0">No rules match the current filter.</p>'; }
+  Object.keys(layerLabels).forEach(layer => {
+    if (!grouped[layer]) return;
+    html += `<div style="margin-bottom:20px"><div class="section-title">${layerLabels[layer]}</div>`;
+    grouped[layer].forEach(r => {
+      html += `<div class="rule">
+        <div class="rule-header" onclick="toggleBody('${r.id}')">
+          <span class="badge ${r.severity}">${r.severity}</span>
+          <span class="rule-id">${r.id}</span>
+          <span class="rule-title">${r.title}</span>
+        </div>
+        <div class="rule-body" id="body-${r.id}">
+          <div class="rule-desc">${r.desc}</div>
+          <div class="code-pair">
+            <div class="code-block bad"><div class="code-label">Vulnerable</div><pre>${r.bad}</pre></div>
+            <div class="code-block good"><div class="code-label">Secure</div><pre>${r.good}</pre></div>
+          </div>
+          <div class="owasp">${r.owasp}</div>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  });
+  document.getElementById('rules-container').innerHTML = html;
+}
+render();
+</script>

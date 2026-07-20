@@ -10,7 +10,7 @@ iterating on the prompt in review.py without opening a PR.
 
 import sys
 
-from review import build_prompt, call_gemini
+from review import build_prompt, call_gemini, load_rules
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
 
     code_to_review = "\n\n".join(sections)
 
-    prompt = build_prompt(code_to_review)
+    prompt = build_prompt(code_to_review, load_rules())
     review_text = call_gemini(prompt)
     print(review_text)
 
