@@ -8,11 +8,32 @@ from google import genai
 # Load the variables from .env into the environment
 load_dotenv()
 
-# Read the API key that .env just loaded
-api_key = os.getenv("GEMINI_API_KEY")
+# The Gemini client is built lazily by get_client() rather than at import time.
+# Constructing it here would raise ValueError on a missing GEMINI_API_KEY before
+# any error handling runs, and that bare traceback exits 1 -- indistinguishable
+# from an intentional merge block. Fork PRs and Dependabot PRs never receive
+# repository secrets, so this is a routine condition, not an exotic one.
+_client = None
 
-# Create a client
-client = genai.Client(api_key=api_key)
+
+def get_client():
+    """Return the Gemini client, constructing it on first use.
+
+    Raises RuntimeError with an actionable message when GEMINI_API_KEY is absent
+    so main() can report a configuration problem instead of crashing.
+    """
+    global _client
+    if _client is None:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not set. In GitHub Actions this usually means "
+                "the pull request comes from a fork or from Dependabot, neither "
+                "of which receives repository secrets."
+            )
+        _client = genai.Client(api_key=api_key)
+    return _client
+
 
 # Maximum number of lines a single file may contain before it is flagged.
 # Kept as a simple constant so it is easy to change later.
@@ -31,6 +52,25 @@ AUDIT_PATH = os.getenv("NPM_AUDIT_FILE", "audit.json")
 # cannot blow up the token budget.
 MAX_AUDIT_PACKAGES = 40
 
+# GitHub rejects an issue comment longer than 65536 characters with HTTP 422.
+# Hitting that meant the PR got no comment at all, so a blocked merge showed up
+# as a bare red check with nothing explaining it.
+MAX_COMMENT_CHARS = 65536
+
+# Appended when we trim. The last sentence matters: truncation happens well
+# after decide_verdict has read the full review, so a reader must not think the
+# shortened text is what the gate judged.
+TRUNCATION_NOTICE = (
+    "\n\n---\n"
+    "**Review truncated to fit GitHub's 65,536-character comment limit.** "
+    "The full review is in the workflow run log. The merge verdict above was "
+    "computed from the complete review, not from this shortened copy."
+)
+
+# Closes a code fence left open by cutting mid-block; without it the rest of the
+# comment (including the notice) renders as one giant code block.
+_FENCE_CLOSE = "\n```"
+
 # Machine-readable tokens Gemini is asked to print. Informational only: the
 # merge verdict is decided from the rulebook (see decide_verdict), not from this
 # token, so the model cannot block or unblock a merge by mislabeling severity.
@@ -39,7 +79,15 @@ GATE_PASS = "MERGE_GATE: PASS"
 
 # Matches the "Rule: NODE-001" line that prefixes each finding, capturing the
 # rule ID so we can look up its authoritative severity in the rulebook.
-RULE_ID_RE = re.compile(r"Rule:\s*([A-Za-z]+-\d+)")
+#
+# The model is asked for a bare "Rule:" label, but its output is destined for a
+# markdown PR comment, so it routinely decorates the line: "**Rule:** NODE-001",
+# "- **Rule:** NODE-001", "Rule: `NODE-001`". The optional [*`_#>\s-] runs absorb
+# that decoration on either side of the label. Missing a citation here silently
+# downgrades a critical finding to a passing check, so this pattern is
+# deliberately permissive -- over-matching costs a false block, under-matching
+# ships a vulnerability.
+RULE_ID_RE = re.compile(r"[*`_]*Rule[*`_]*\s*:\s*[*`_\s]*([A-Za-z]+-\d+)")
 
 
 def load_rules():
@@ -52,10 +100,21 @@ def load_rules():
     """
     try:
         with open(RULES_PATH, encoding="utf-8") as rules_file:
-            return json.load(rules_file)
+            rules = json.load(rules_file)
     except (OSError, json.JSONDecodeError) as error:
         print(f"Could not load rulebook at {RULES_PATH}: {error}")
         return []
+
+    # A JSON object (or anything else) would iterate into strings downstream and
+    # raise a TypeError deep inside format_rulebook; reject it here instead.
+    if not isinstance(rules, list):
+        print(
+            f"Rulebook at {RULES_PATH} must be a JSON array of rule objects, "
+            f"got {type(rules).__name__}."
+        )
+        return []
+
+    return rules
 
 
 def format_rulebook(rules):
@@ -64,9 +123,28 @@ def format_rulebook(rules):
     Each rule becomes one labeled entry citing its ID, severity, and OWASP tag,
     with the secure example doubling as the fix template. The bad/good pair acts
     as a few-shot exemplar so Gemini matches the documented patterns precisely.
+
+    Malformed entries are skipped with a warning rather than raising, so a bad
+    hand-edit to rules.json degrades the review instead of crashing the run --
+    a crash exits 1, which is indistinguishable from an intentional merge block.
     """
     lines = []
     for rule in rules:
+        if not isinstance(rule, dict):
+            print(f"Skipping malformed rulebook entry (not an object): {rule!r}")
+            continue
+        missing = [
+            key for key in
+            ("id", "severity", "owasp", "title", "detect",
+             "insecure_example", "secure_example")
+            if key not in rule
+        ]
+        if missing:
+            print(
+                f"Skipping rulebook entry {rule.get('id', '<no id>')!r}: "
+                f"missing field(s) {', '.join(missing)}."
+            )
+            continue
         lines.append(
             f"[{rule['id']} | {rule['severity']} | {rule['owasp']}] {rule['title']}\n"
             f"  Detect: {rule['detect']}\n"
@@ -95,11 +173,23 @@ def load_npm_audit(path=AUDIT_PATH):
         return None
 
     # npm v7+ shape: {"vulnerabilities": {name: {...}}, "metadata": {...}}.
+    # Older npm and some error paths emit an array instead, and the workflow's
+    # `|| true` means a malformed audit.json still reaches us -- so confirm the
+    # top level is an object before calling .get on it.
+    if not isinstance(data, dict):
+        print(
+            f"npm audit output at {path} was a JSON "
+            f"{type(data).__name__}, expected an object; ignoring it."
+        )
+        return None
+
     vulns = data.get("vulnerabilities")
     if not isinstance(vulns, dict):
         return None
 
-    totals = (data.get("metadata") or {}).get("vulnerabilities") or {}
+    metadata = data.get("metadata")
+    totals = (metadata if isinstance(metadata, dict) else {}).get("vulnerabilities")
+    totals = totals if isinstance(totals, dict) else {}
     header = (
         f"npm audit totals: critical={totals.get('critical', 0)}, "
         f"high={totals.get('high', 0)}, moderate={totals.get('moderate', 0)}, "
@@ -109,14 +199,18 @@ def load_npm_audit(path=AUDIT_PATH):
     if not vulns:
         return header + " No vulnerable packages reported."
 
+    shown = list(vulns.items())[:MAX_AUDIT_PACKAGES]
     entries = []
-    for name, info in list(vulns.items())[:MAX_AUDIT_PACKAGES]:
+    for name, info in shown:
         if not isinstance(info, dict):
             continue
         severity = info.get("severity", "unknown")
-        # `via` holds advisory objects (with title/url) or plain dep-name strings.
+        # `via` holds advisory objects (with title/url) or plain dep-name strings,
+        # and is occasionally a bare string; guard so we never iterate characters.
+        raw_via = info.get("via")
+        raw_via = raw_via if isinstance(raw_via, list) else []
         advisories = []
-        for via in info.get("via", []):
+        for via in raw_via:
             if isinstance(via, dict):
                 title = via.get("title") or via.get("name") or ""
                 url = via.get("url") or ""
@@ -128,7 +222,10 @@ def load_npm_audit(path=AUDIT_PATH):
         )
         entries.append(f"- {name} [{severity}]{fix_note}: {detail}")
 
-    hidden = len(vulns) - len(entries)
+    # Count against what we sliced off, not what we rendered: entries can be
+    # shorter than `shown` when a malformed record is skipped, which would
+    # otherwise overstate the omitted count.
+    hidden = len(vulns) - len(shown)
     if hidden > 0:
         entries.append(f"- ...and {hidden} more vulnerable package(s) omitted.")
 
@@ -180,21 +277,75 @@ def get_pr_diff(owner, repo, pr_number):
         "Accept": "application/vnd.github+json",
     }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as error:
-        status = error.response.status_code
-        print(f"GitHub API request failed with HTTP {status}: {error.response.reason}")
-        return None
-    except requests.exceptions.RequestException as error:
-        print(f"Could not reach the GitHub API: {error}")
-        return None
+    # This endpoint paginates at 30 items by default, so an unpaginated request
+    # silently drops every file past the 30th -- code that then merges with a
+    # green "reviewed" check. Walk every page at the 100-item maximum.
+    #
+    # PAGE_CAP is 31, not 30, on purpose: GitHub serves at most 3000 files here,
+    # so a 3000-file PR fills exactly 30 pages and only the 31st comes back empty
+    # to signal the end. Capping at 30 would refuse that PR as "partial" even
+    # though we had in fact fetched all of it. The cap is a runaway guard, not a
+    # size limit, so it must sit just past what the API can return.
+    PER_PAGE = 100
+    PAGE_CAP = 31
 
-    files = response.json()
+    files = []
+    page = 1
+
+    while page <= PAGE_CAP:
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                params={"per_page": PER_PAGE, "page": page},
+                timeout=30,
+            )
+            response.raise_for_status()
+            # Parsed inside the try: a proxy or error page can return HTTP 200
+            # with a non-JSON body, and decoding that raises. Left outside, it
+            # would escape as a traceback and exit 1 -- which the workflow cannot
+            # tell apart from an intentional merge block.
+            batch = response.json()
+        except requests.exceptions.HTTPError as error:
+            status = error.response.status_code
+            print(
+                f"GitHub API request failed with HTTP {status}: "
+                f"{error.response.reason}"
+            )
+            return None
+        except ValueError as error:
+            print(f"GitHub API returned a non-JSON response: {error}")
+            return None
+        except requests.exceptions.RequestException as error:
+            print(f"Could not reach the GitHub API: {error}")
+            return None
+
+        if not isinstance(batch, list):
+            print(f"Unexpected GitHub API response shape: {type(batch).__name__}.")
+            return None
+        if not batch:
+            break
+
+        files.extend(batch)
+        # A short page is the last page. A full page means more may follow.
+        if len(batch) < PER_PAGE:
+            break
+        page += 1
+    else:
+        # Ran out of pages before running out of files. Reviewing a known-partial
+        # diff would be worse than not reviewing: it produces a clean verdict on
+        # code nobody looked at. Fail instead and let a human split the PR.
+        print(
+            f"PR has more changed files than this agent will page through "
+            f"({PAGE_CAP * PER_PAGE}); refusing to review a partial diff. "
+            f"Split this pull request into smaller ones."
+        )
+        return None
 
     sections = []
     for changed_file in files:
+        if not isinstance(changed_file, dict):
+            continue
         filename = changed_file.get("filename", "unknown file")
         patch = changed_file.get("patch")
         if patch is None:
@@ -203,7 +354,44 @@ def get_pr_diff(owner, repo, pr_number):
         else:
             sections.append(f"### {filename}\n{patch}")
 
+    print(f"Fetched {len(sections)} changed file(s) from PR #{pr_number}.")
     return "\n\n".join(sections)
+
+
+def truncate_comment(body):
+    """Trim a comment body to GitHub's character limit, preserving the opening.
+
+    The head is kept rather than the tail because the header (which explains why
+    the check is red) and the highest-severity findings appear first.
+
+    Cutting is done at a line boundary where one is nearby, so we do not slice a
+    finding mid-word, and an unbalanced code fence is closed so the notice does
+    not end up rendered inside a code block. Bodies within the limit are returned
+    unchanged, so the common case is byte-identical to before.
+    """
+    if len(body) <= MAX_COMMENT_CHARS:
+        return body
+
+    # Reserve room for everything we append, or the result would overflow the
+    # very limit this function exists to respect.
+    budget = MAX_COMMENT_CHARS - len(TRUNCATION_NOTICE) - len(_FENCE_CLOSE)
+    head = body[:budget]
+
+    # Only back up to a line break if one is close to the cut; otherwise a body
+    # with few newlines would lose a large tail of content for no benefit.
+    last_newline = head.rfind("\n")
+    if last_newline > budget - 2000:
+        head = head[:last_newline]
+
+    # An odd fence count means the cut landed inside a code block.
+    if head.count("```") % 2:
+        head += _FENCE_CLOSE
+
+    print(
+        f"Review comment was {len(body)} chars, over GitHub's "
+        f"{MAX_COMMENT_CHARS}-char limit; truncating. Full review is above."
+    )
+    return head + TRUNCATION_NOTICE
 
 
 def post_pr_comment(owner, repo, pr_number, comment_body):
@@ -223,7 +411,10 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
     }
-    payload = {"body": comment_body}
+    # Enforced here, at the boundary with GitHub, rather than at the call site,
+    # so no future caller can reintroduce the 422 that silently dropped the
+    # entire comment and left a blocked merge with no visible explanation.
+    payload = {"body": truncate_comment(comment_body)}
 
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=30)
@@ -236,8 +427,14 @@ def post_pr_comment(owner, repo, pr_number, comment_body):
         print(f"Could not reach the GitHub API to post the comment: {error}")
         return None
 
-    comment = response.json()
-    comment_url = comment.get("html_url")
+    # The comment is already posted at this point; a body we cannot parse is
+    # cosmetic (we only want the URL to log), so never let it raise.
+    try:
+        comment = response.json()
+    except ValueError:
+        comment = None
+
+    comment_url = comment.get("html_url") if isinstance(comment, dict) else None
     if comment_url:
         print(f"Posted review comment to PR #{pr_number}: {comment_url}")
     else:
@@ -357,46 +554,75 @@ def call_gemini(prompt, model="gemini-2.5-flash"):
     """Send a prompt to Gemini and return the response text.
 
     Returns None if the request fails so callers can handle the error instead
-    of crashing with a raw traceback.
+    of crashing with a raw traceback. Reading `response.text` is inside the try
+    because it raises (not returns None) when the response has no usable
+    candidate -- a safety block, or a MAX_TOKENS finish on a very large diff.
     """
     try:
-        response = client.models.generate_content(
+        response = get_client().models.generate_content(
             model=model,
             contents=prompt,
             # Deterministic output: security review should be as consistent as
             # possible across identical diffs.
             config={"temperature": 0},
         )
+        return response.text
     except Exception as error:
         print(f"Gemini request failed: {error}")
         return None
 
-    return response.text
-
 
 def decide_verdict(review_text, rules):
-    """Decide whether the review blocks the merge.
+    """Decide whether the review blocks the merge. Defaults to blocking.
 
-    The rulebook (rules.json) is authoritative on severity: we block only when a
-    finding cites a rule whose rulebook severity is 'critical'. This keeps the
-    gate deterministic and controlled by rules.json rather than by the model's
-    self-assigned severity, so downgrading a rule to 'warning' reliably stops it
-    from blocking even if the model still calls it critical in its prose.
+    The rulebook (rules.json) is authoritative on severity: a finding citing a
+    rule whose rulebook severity is 'critical' blocks the merge. This keeps the
+    gate controlled by rules.json rather than by the model's self-assigned
+    severity, so downgrading a rule to 'warning' reliably stops it from blocking
+    even if the model still calls it critical in its prose.
 
-    Falls back to the model's gate token only when the rulebook could not be
-    loaded, so a missing rules.json fails safe instead of never blocking.
+    Every signal here can only ADD a block, never remove one, and anything we
+    cannot parse blocks. That direction matters: a missed citation ships a
+    vulnerability behind a green check, while a spurious block costs one human
+    glance at the PR. The rulebook lookup and the model's own gate token are
+    therefore OR-ed rather than layered, because each fails in different
+    situations -- the lookup misses when the model formats a citation oddly, the
+    token misses when the model mislabels severity.
     """
-    if rules:
-        severity_by_id = {rule["id"]: rule["severity"] for rule in rules}
-        cited_ids = {m.group(1).upper() for m in RULE_ID_RE.finditer(review_text)}
-        return any(severity_by_id.get(rule_id) == "critical" for rule_id in cited_ids)
+    # A response we cannot read at all is not evidence that the code is clean.
+    if not review_text or not review_text.strip():
+        print("Review text was empty; blocking as a precaution.")
+        return True
 
-    # Rulebook unavailable: fall back to the model's token, failing safe.
+    # Signal 1: rulebook severity for every cited rule ID (authoritative).
+    if rules:
+        severity_by_id = {}
+        for rule in rules:
+            if isinstance(rule, dict) and "id" in rule and "severity" in rule:
+                severity_by_id[str(rule["id"]).upper()] = rule["severity"]
+
+        if not severity_by_id:
+            # rules.json parsed but carried no usable entries: treat the
+            # rulebook as unavailable rather than silently passing everything.
+            print("Rulebook contained no usable id/severity pairs.")
+        else:
+            cited_ids = {m.group(1).upper() for m in RULE_ID_RE.finditer(review_text)}
+            if any(severity_by_id.get(rid) == "critical" for rid in cited_ids):
+                return True
+
+    # Signal 2: the model's own gate token, as an independent backstop.
     if GATE_BLOCK in review_text:
         return True
     if GATE_PASS in review_text:
         return False
-    return "No issues found in the provided diff." not in review_text
+
+    # Neither signal resolved: the model ignored the output contract, so we
+    # cannot tell a clean diff from a truncated or derailed response.
+    if "No issues found in the provided diff." in review_text:
+        return False
+
+    print("Review had no recognizable merge verdict; blocking as a precaution.")
+    return True
 
 
 def main():
@@ -421,25 +647,42 @@ def main():
         print("Could not fetch the PR diff, so there is nothing to review. Exiting.")
         raise SystemExit(1)
 
+    # An empty diff is not an error, but there is nothing to send to the model.
+    # get_pr_diff returns "" (not None) for a PR whose files carry no patch text,
+    # so without this check we would spend a model call reviewing nothing.
+    if not code_to_review.strip():
+        print("PR contains no reviewable diff text; nothing to review.")
+        return
+
     prompt = build_prompt(code_to_review, rules, audit_summary)
 
     # Print Gemini's review to the terminal
     review_text = call_gemini(prompt)
 
-    # Stop here if the Gemini call failed, so we don't post "None" as the review
+    # No review means we could not assess this PR. Exit non-zero to keep the gate
+    # closed: an unreviewed diff must not merge behind a green check. The message
+    # distinguishes this from a findings-based block so a red check is never
+    # ambiguous between "unsafe code" and "misconfigured agent".
     if review_text is None:
-        print("Gemini did not return a review, so there is nothing to post. Exiting.")
+        print(
+            "REVIEW UNAVAILABLE: Gemini returned no review, so this PR could not "
+            "be assessed. Failing the check so an unreviewed diff cannot merge. "
+            "Check the log above for the underlying cause (missing GEMINI_API_KEY, "
+            "API error, or a response blocked by safety filters)."
+        )
         raise SystemExit(1)
 
     print(review_text)
 
-    # Decide the verdict from Gemini's gate token. Only critical findings block;
-    # warnings are advisory and leave the check green.
+    # Decide the verdict. Critical findings block; so does a review we could not
+    # parse a verdict from, since that is not evidence the diff is clean.
     blocks_merge = decide_verdict(review_text, rules)
     if blocks_merge:
         header = (
-            "Gemini review: critical issue(s) found. This check is failing on "
-            "purpose to block the merge until they are resolved."
+            "Gemini review: this check is failing on purpose to block the merge. "
+            "Either a critical issue was found, or the review could not be parsed "
+            "into a clear verdict (which is treated as a block, not a pass). "
+            "See the findings below."
         )
     else:
         header = (
