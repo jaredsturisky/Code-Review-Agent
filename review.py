@@ -77,17 +77,44 @@ _FENCE_CLOSE = "\n```"
 GATE_BLOCK = "MERGE_GATE: BLOCK"
 GATE_PASS = "MERGE_GATE: PASS"
 
-# Matches the "Rule: NODE-001" line that prefixes each finding, capturing the
-# rule ID so we can look up its authoritative severity in the rulebook.
+# Isolates the value of each "Rule:" field, so rule IDs are read only from where
+# a finding actually cites them and not from surrounding prose.
 #
-# The model is asked for a bare "Rule:" label, but its output is destined for a
-# markdown PR comment, so it routinely decorates the line: "**Rule:** NODE-001",
-# "- **Rule:** NODE-001", "Rule: `NODE-001`". The optional [*`_#>\s-] runs absorb
-# that decoration on either side of the label. Missing a citation here silently
-# downgrades a critical finding to a passing check, so this pattern is
-# deliberately permissive -- over-matching costs a false block, under-matching
+# Two model behaviors drive the shape of this pattern, both observed in real
+# Gemini output rather than assumed:
+#
+#   1. The output lands in a markdown comment, so the label arrives decorated:
+#      "**Rule:** NODE-001", "- **Rule:** NODE-001", "Rule: `NODE-001`".
+#   2. The model merges related findings onto one line and cites several rules
+#      at once: "Rule: DB-003, NODE-005, general". Capturing only the first ID
+#      let a critical rule listed second pass as a warning.
+#
+# The capture therefore runs to the next field label or blank line rather than
+# stopping at the first ID, and every ID inside it is collected. Missing a
+# citation silently downgrades a critical finding to a green check, so this
+# errs toward over-matching: a spurious block costs a glance, a missed one
 # ships a vulnerability.
-RULE_ID_RE = re.compile(r"[*`_]*Rule[*`_]*\s*:\s*[*`_\s]*([A-Za-z]+-\d+)")
+RULE_FIELD_RE = re.compile(
+    r"[*`_]*Rule[*`_]*\s*:\s*"
+    r"(.*?)"
+    r"(?=\n\s*[*`_]*(?:Location|Severity|Problem|Suggested)\b|\n\s*\n|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# A rule ID as it appears inside a Rule: field, e.g. NODE-001 or REACT-004.
+RULE_ID_RE = re.compile(r"\b([A-Za-z]{2,10}-\d{1,4})\b")
+
+
+def cited_rule_ids(review_text):
+    """Return the set of rule IDs cited by the review, upper-cased.
+
+    Scoped to "Rule:" fields so a rule ID mentioned in prose ("this is not a
+    NODE-001 issue") or echoed out of the diff does not count as a citation.
+    """
+    cited = set()
+    for field in RULE_FIELD_RE.finditer(review_text or ""):
+        cited.update(rid.upper() for rid in RULE_ID_RE.findall(field.group(1)))
+    return cited
 
 
 def load_rules():
@@ -562,8 +589,12 @@ def call_gemini(prompt, model="gemini-2.5-flash"):
         response = get_client().models.generate_content(
             model=model,
             contents=prompt,
-            # Deterministic output: security review should be as consistent as
-            # possible across identical diffs.
+            # Reduces variance but does NOT make output deterministic. Measured
+            # over repeated runs of one diff: clear-cut cases were stable (an
+            # unambiguous SQL injection blocked 6/6, clean code passed 6/6), but
+            # a borderline case -- interpolating an authenticated req.user.id
+            # into SQL -- split 3 block / 3 pass. Treat a single green check as
+            # weak evidence on borderline findings, not proof.
             config={"temperature": 0},
         )
         return response.text
@@ -606,7 +637,7 @@ def decide_verdict(review_text, rules):
             # rulebook as unavailable rather than silently passing everything.
             print("Rulebook contained no usable id/severity pairs.")
         else:
-            cited_ids = {m.group(1).upper() for m in RULE_ID_RE.finditer(review_text)}
+            cited_ids = cited_rule_ids(review_text)
             if any(severity_by_id.get(rid) == "critical" for rid in cited_ids):
                 return True
 
